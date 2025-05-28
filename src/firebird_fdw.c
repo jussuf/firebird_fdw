@@ -1106,8 +1106,9 @@ firebirdGetForeignRelSize(PlannerInfo *root,
 		baserel->rows = fdw_state->estimated_row_count;
 	}
 	/*
-	 * do a brute-force SELECT COUNT(*); Firebird doesn't provide any other
-	 * way of estimating table size (see http://www.firebirdfaq.org/faq376/ )
+	 * it is possible to use index statistics for table size estimation
+	 * https://ib-aid.com/en/articles/how-to-estimate-number-of-records-in-the-table-using-statistics-value-of-the-unique-index/
+	 * in case no suitable index exists, do a brute-force SELECT COUNT(*)
 	 */
 	else
 	{
@@ -1118,9 +1119,17 @@ firebirdGetForeignRelSize(PlannerInfo *root,
 		}
 		else
 		{
-			appendStringInfo(&query,
-							 "SELECT COUNT(*) FROM %s",
-							 quote_fb_identifier(fdw_state->svr_table, fdw_state->quote_identifier));
+			appendStringInfo(&query, 
+"			SELECT COALESCE( \n"
+"				(SELECT FIRST 1 CAST( ROUND(1/RDB$STATISTICS) AS INTEGER) FROM RDB$INDICES \n"
+"					WHERE RDB$RELATION_NAME=upper('%s') \n"
+"					AND RDB$INDEX_INACTIVE=0 \n"
+"					AND RDB$UNIQUE_FLAG=1 \n"
+"					AND RDB$EXPRESSION_SOURCE IS NULL), \n"
+"				(SELECT COUNT(*) FROM %s) \n"
+"			) FROM RDB$DATABASE",
+				quote_fb_identifier(fdw_state->svr_table, fdw_state->quote_identifier),
+				quote_fb_identifier(fdw_state->svr_table, fdw_state->quote_identifier));
 		}
 
 		fdw_state->query = pstrdup(query.data);
